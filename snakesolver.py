@@ -1,7 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
 # 
-# snakesolver v0.1, 27th september 2011
+# snakesolver v0.2, 1st october 2011
+#
+# changelog:
+#   - give all the solutions ignoring those which are equivalent by symmetry or
+#     rotation
 #
 # Solver for generalized snake-cube :
 # http://en.wikipedia.org/wiki/Snake_cube
@@ -78,7 +82,7 @@ class VolumeHelper:
     already filled.
     """
     
-    def __init__(self, dimensions, init_cursor=None):
+    def __init__(self, dimensions):
         """Create a volume helper.
         
         Keyword arguments:
@@ -89,8 +93,6 @@ class VolumeHelper:
         self.path = []
         self.flags = VolumeHelper.__create_volume_flags(dimensions)
         self.init_cursor = None
-        if init_cursor is not None:
-            self.set_cursor(init_cursor)
     
     def set_cursor(self, cursor):
         """Change the initial cursor position."""
@@ -173,21 +175,6 @@ class VolumeHelper:
             self.__set_flag(self.cursor, False)
             self.cursor[vector.position] += -sign
     
-    def all_points(self, index=0):
-        """Returns all the possible points for the dimensions.
-        
-        For example, if dimensions is [2,2], then all_points is
-        [[0,0], [0,1], [1,0], [1,1]].
-        This function returns an iterator: the full list is not created.
-        (replace "()" by "[]" in the return statement to construct the full
-        list).
-        """
-        if index == len(self.dimensions):
-            return [[]]
-        # h is "head", t is "tail"
-        return ([h] + t for h in xrange(self.dimensions[index])
-                for t in self.all_points(index + 1))
-    
     @staticmethod
     def __create_volume_flags(dimensions, index=0):
         """Create a multi-dimensional array filled with False values."""
@@ -198,7 +185,174 @@ class VolumeHelper:
     
     def __repr__(self):
         return repr(cube_flags)
+
+class SymmetryHelper:
+
+    """Symmetry helper for the solver.
     
+    It manages equivalence classes for equivalent points and equivalent pathes
+    by symmetry and/or rotation.
+    
+    As symmetries and rotations only concern permutation and inversion of
+    vector components (positions), then equivalences classes concern
+    dimensions.
+    If x and z axis are equivalent (at a specific step), we could represent the
+    equivalence classes like this: [ [0, 2], [1] ]. In that case, the solver
+    would only try vectors on x axis, but will ignore z axis (because it is
+    equivalent).
+    Then, after a move, they are not equivalent anymore, then the equivalence
+    classes could be represented by [ [0], [1], [2] ].
+    
+    But there is a far better representation for handling quickly the
+    equivalence classes: a simple array, with the same length as dimensions.
+    For each dimension i, the eq_classes array contains the lower index of an
+    equivalent axis:
+      - i if there is no axis with lower index which is equivalent;
+      - j if there is an axis j with a lower index (the lowest) which is
+        equivalent.
+    For example, if x and z are equivalent, then eq_classes is [ 0, 1, 0 ].
+    If y and z are equivalent, then eq_classes is [ 0, 1, 1 ].
+    If x and y are equivalent, then eq_classes is [ 0, 0, 2 ].
+    If x, y and z are equivalent, then eq_classes is [ 0, 0, 0 ].
+    If none are equivalent, then eq_classes is [ 0, 1, 2 ].
+    
+    With this representation, we can easily pick only 1 vector per equivalence
+    class (and ignore the others): the ones with eq_classes[i] == i.
+    
+    eq_classes_path stores the list of eq_classes used, to restore previous
+    ones when calling back(). Equivalence classes at index i are always
+    computed from the equivalence classes at index i-1 (except if i == 0),
+    and are always "as or more splitted".
+    """
+
+    def __init__(self, dimensions):
+        self.dimensions = dimensions
+        # eq_classes is always eq_classes_path[-1]
+        self.eq_classes = self.__create_eq_classes_from_dimensions()
+        self.eq_classes_path = [ self.eq_classes ]
+    
+    def __create_eq_classes_from_dimensions(self):
+        """Compute the first equivalences classes from the dimensions.
+        
+        The dimensions which have the same length are equivalent.
+        """
+        eq_classes = range(len(self.dimensions))
+        for i in xrange(len(self.dimensions)):
+            value = self.dimensions[i]
+            for j in xrange(0, i):
+                # not called when i == 0
+                if self.dimensions[j] == value:
+                    eq_classes[i] = j
+                    break
+        return eq_classes
+    
+    def set_cursor(self, cursor):
+        """Change the initial cursor position."""
+        # the first item in eq_classes_path is computed from the dimensions
+        # the second item is computed from the init_point
+        # the next items are computed from the next moves (vectors)
+        assert len(self.eq_classes_path) == 1 or\
+               len(self.eq_classes_path) == 2, 'Changing cursor cannot ' +\
+               'happen in the middle of a path calculation'
+        if len(self.eq_classes_path) == 2:
+            # this is not the first initialisation, we have to remove the
+            # eq_classes associated with the previous cursor
+            self.eq_classes_path.pop()
+        self.cursor = cursor
+        
+        # make a copy to not modify the previous one (must be immutable)
+        cursor_eq_classes = self.eq_classes_path[0][:]
+        for i in xrange(len(cursor_eq_classes)):
+            # if the equivalence class must be splitted
+            # i.e. the value for the axis has changed
+            if cursor_eq_classes[i] != i and not self.__eq_cmp(
+                    cursor[cursor_eq_classes[i]],\
+                    cursor[i], self.dimensions[i]):
+                old_class = cursor_eq_classes[i]
+                cursor_eq_classes[i] = i
+                # If eq_classes = [ 0, 0, 0 ], and we detected that the first
+                # dimension is not equivalent anymore with the two others,
+                # then the new eq_classes will be [ 0, 1, 1 ]:
+                # we have to check the next dimensions to change their value
+                for j in xrange(i + 1, len(cursor_eq_classes)):
+                    if cursor_eq_classes[j] == old_class:
+                        cursor_eq_classes[j] = i
+        
+        self.eq_classes = cursor_eq_classes
+        self.eq_classes_path.append(cursor_eq_classes)
+        # At this point, eq_classes_path contains two items:
+        #   - the eq_class at index 0 computed only from the dimensions;
+        #   - the eq_class at index 1 computed from the initial point
+        #     (which splits the equivalence classes computed from the
+        #     dimensions).
+        
+    def get_useful_points(self, index=0, minimum=0):
+        """Returns one point from each equivalence class, not more.
+        
+        For example, if dimensions is [3, 3, 3], then useful points are
+        [[0, 0, 0], [0, 0, 1], [0, 1, 1], [1, 1, 1]]
+        which are, respectively:
+        [ a corner, an edge, a center, the core (middle of the cube) ]
+        All other points are equivalent to one point in this minimal set.
+        """
+        if index == len(self.dimensions):
+            return [[]]
+        # h is "head", t is "tail"
+        return ([h] + t for h in xrange(minimum,
+                                        (self.dimensions[index] + 1) / 2)\
+                for t in self.get_useful_points(index + 1, h))
+    
+    def move(self, vector):
+        """Compute the new equivalent classes after a move by the vector."""
+        assert self.eq_classes[vector.position] == vector.position,\
+               'A move must always concern the first vector of an ' +\
+               'equivalence class'
+               
+        # create a copy of eq_classes only if it changes, else use the same
+        # instance
+        has_changes = False
+        position = vector.position
+        new_eq_classes = self.eq_classes
+        new_eq_class = None
+        # the axis is now alone in its equivalence class (the vector has moved
+        # the cursor on this axis, but not on the others), we have to update
+        # the others (if any)
+        for i in xrange(position + 1, len(self.eq_classes)):
+            if self.eq_classes[i] == position:
+                if not has_changes:
+                    has_changes = True
+                    new_eq_classes = self.eq_classes[:]
+                if new_eq_class is None:
+                    new_eq_class = i
+                new_eq_classes[i] = new_eq_class
+        self.eq_classes = new_eq_classes
+        self.eq_classes_path.append(new_eq_classes)
+    
+    def back(self):
+        """Cancel the last move."""
+        self.eq_classes_path.pop()
+        self.eq_classes = self.eq_classes_path[-1]
+    
+    def must_explore(self, i):
+        """Returns True if the vector position is the first in its equivalence
+        class (the others will be ignored, because equivalents)"""
+        return self.eq_classes[i] == i
+    
+    @staticmethod
+    def __eq_cmp(p1, p2, dim):
+        """Comparator which tests if two point are "equivalent" on an axis.
+        
+        Keyword arguments:
+        p1 -- projection of the point 1 on the axis
+        p2 -- projection of the point 2 on the axis
+        dim -- length of dimension associated to the axis
+        
+        p1 and p2 are equivalent if and only if:
+          -    v1 == v2 (they are at the same place)
+          - or v1 + v2 + 1 = dim (they are symmetrically opposite)
+        """
+        return p1 == p2 or p1 + p2 + 1 == dim
+
 class SnakeCubeSolver:
     
     """Solver."""
@@ -214,6 +368,7 @@ class SnakeCubeSolver:
         self.dimensions = dimensions
         self.structure = structure
         self.volume_helper = VolumeHelper(dimensions)
+        self.symmetry_helper = SymmetryHelper(dimensions)
     
     def solve(self):
         """Solve the snake.
@@ -229,9 +384,11 @@ class SnakeCubeSolver:
                   str(structure_length) + ' instead of ' +\
                   str(needed_length) + ')'
         else:
-            for init_point in self.volume_helper.all_points():
-                # for each initial point
+            for init_point in self.symmetry_helper.get_useful_points():
+                # for each useful initial point (in a minimal set where no
+                # points are equivalent to another)
                 self.volume_helper.set_cursor(init_point)
+                self.symmetry_helper.set_cursor(init_point)
                 # recursively solve and yield the solutions
                 for solution in self.__solve_rec(init_point[:], 0):
                     yield solution
@@ -257,20 +414,24 @@ class SnakeCubeSolver:
             norm = self.structure[step]
             # iterate over the next possible vectors, i.e. all vectors which
             # are orthogonal to the previous one
+            
             for possible_vector in ( Vector(i, v)
                                      for v in [ norm, -norm ]
                                      for i in xrange(len(self.dimensions))
-                                     if i != previous_position ):
+                                     if i != previous_position and
+                                        self.symmetry_helper.must_explore(i)):
                 if self.volume_helper.can_move(possible_vector):
                     # if it is possible to move the cursor by the vector, then
                     # move it
                     self.volume_helper.move(possible_vector)
                     # and recursively solve
+                    self.symmetry_helper.move(possible_vector)
                     for solution in self.__solve_rec(init_cursor, step + 1):
                         yield solution
                     # cancel the move to put back the state of the helper
                     self.volume_helper.back()
-
+                    self.symmetry_helper.back()
+    
 def main():
     solver = SnakeCubeSolver(VOLUME_DIMENSIONS, SNAKE_STRUCTURE)
     # print all solutions
