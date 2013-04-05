@@ -1,13 +1,18 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
 # 
-# snakesolver v0.2, 1st october 2011
+# snakesolver v0.2.1, 5th october 2011
 #
 # changelog:
-#   - give all the solutions ignoring those which are equivalent by symmetry or
-#     rotation
+#   0.2.1
+#     - get_useful_points() did not work for non-(hyper-)cubic volumes
+#   0.2
+#     - give all the solutions ignoring those which are equivalent by symmetry
+#       or rotation
+#   0.1
+#     - initial version
 #
-# Solver for generalized snake-cube :
+# Solver for generalized snake-cube:
 # http://en.wikipedia.org/wiki/Snake_cube
 # http://fr.wikipedia.org/wiki/Cube_serpent
 #
@@ -16,13 +21,13 @@
 
 # snake structure (list of consecutives vector norms)
 # Wikipedia example
-SNAKE_STRUCTURE = [ 2, 1, 1, 2, 1, 2, 1, 1, 2, 2, 1, 1, 1, 2, 2, 2, 2 ]
+SNAKE_STRUCTURE = [2, 1, 1, 2, 1, 2, 1, 1, 2, 2, 1, 1, 1, 2, 2, 2, 2]
 
 # size of each dimension of the target volume
-VOLUME_DIMENSIONS = [ 3, 3, 3 ]
+VOLUME_DIMENSIONS = [3, 3, 3]
 
 # first variable names, the next will be k1, k2, k3...
-VARIABLES = [ 'x', 'y', 'z', 't' ]
+VARIABLES = ['x', 'y', 'z', 't']
 
 class Vector:
     
@@ -48,7 +53,7 @@ class Vector:
     def __get_variable(position):
         """Returns the variable name associated to position.
         
-        Variable names are : [ 'x', 'y', 'z', 't', 'k1', 'k2', 'k3', ... ].
+        Variable names are : ['x', 'y', 'z', 't', 'k1', 'k2', 'k3', ...].
         """
         if position < len(VARIABLES):
             return VARIABLES[position]
@@ -180,7 +185,7 @@ class VolumeHelper:
         """Create a multi-dimensional array filled with False values."""
         if index == len(dimensions) - 1:
             return [False] * dimensions[-1]
-        return [ VolumeHelper.__create_volume_flags(dimensions, index + 1)
+        return [VolumeHelper.__create_volume_flags(dimensions, index + 1)
                  for i in xrange(dimensions[index])]
     
     def __repr__(self):
@@ -197,11 +202,11 @@ class SymmetryHelper:
     vector components (positions), then equivalences classes concern
     dimensions.
     If x and z axis are equivalent (at a specific step), we could represent the
-    equivalence classes like this: [ [0, 2], [1] ]. In that case, the solver
+    equivalence classes like this: [[0, 2], [1]]. In that case, the solver
     would only try vectors on x axis, but will ignore z axis (because it is
     equivalent).
     Then, after a move, they are not equivalent anymore, then the equivalence
-    classes could be represented by [ [0], [1], [2] ].
+    classes could be represented by [[0], [1], [2]].
     
     But there is a far better representation for handling quickly the
     equivalence classes: a simple array, with the same length as dimensions.
@@ -210,11 +215,11 @@ class SymmetryHelper:
       - i if there is no axis with lower index which is equivalent;
       - j if there is an axis j with a lower index (the lowest) which is
         equivalent.
-    For example, if x and z are equivalent, then eq_classes is [ 0, 1, 0 ].
-    If y and z are equivalent, then eq_classes is [ 0, 1, 1 ].
-    If x and y are equivalent, then eq_classes is [ 0, 0, 2 ].
-    If x, y and z are equivalent, then eq_classes is [ 0, 0, 0 ].
-    If none are equivalent, then eq_classes is [ 0, 1, 2 ].
+    For example, if x and z are equivalent, then eq_classes is [0, 1, 0].
+    If y and z are equivalent, then eq_classes is [0, 1, 1].
+    If x and y are equivalent, then eq_classes is [0, 0, 2].
+    If x, y and z are equivalent, then eq_classes is [0, 0, 0].
+    If none are equivalent, then eq_classes is [0, 1, 2].
     
     With this representation, we can easily pick only 1 vector per equivalence
     class (and ignore the others): the ones with eq_classes[i] == i.
@@ -229,7 +234,7 @@ class SymmetryHelper:
         self.dimensions = dimensions
         # eq_classes is always eq_classes_path[-1]
         self.eq_classes = self.__create_eq_classes_from_dimensions()
-        self.eq_classes_path = [ self.eq_classes ]
+        self.eq_classes_path = [self.eq_classes]
     
     def __create_eq_classes_from_dimensions(self):
         """Compute the first equivalences classes from the dimensions.
@@ -237,10 +242,9 @@ class SymmetryHelper:
         The dimensions which have the same length are equivalent.
         """
         eq_classes = range(len(self.dimensions))
-        for i in xrange(len(self.dimensions)):
+        for i in xrange(1, len(self.dimensions)):
             value = self.dimensions[i]
             for j in xrange(0, i):
-                # not called when i == 0
                 if self.dimensions[j] == value:
                     eq_classes[i] = j
                     break
@@ -270,9 +274,9 @@ class SymmetryHelper:
                     cursor[i], self.dimensions[i]):
                 old_class = cursor_eq_classes[i]
                 cursor_eq_classes[i] = i
-                # If eq_classes = [ 0, 0, 0 ], and we detected that the first
+                # If eq_classes = [0, 0, 0], and we detected that the first
                 # dimension is not equivalent anymore with the two others,
-                # then the new eq_classes will be [ 0, 1, 1 ]:
+                # then the new eq_classes will be [0, 1, 1]:
                 # we have to check the next dimensions to change their value
                 for j in xrange(i + 1, len(cursor_eq_classes)):
                     if cursor_eq_classes[j] == old_class:
@@ -286,21 +290,49 @@ class SymmetryHelper:
         #     (which splits the equivalence classes computed from the
         #     dimensions).
         
-    def get_useful_points(self, index=0, minimum=0):
+    def get_useful_points(self):
         """Returns one point from each equivalence class, not more.
         
         For example, if dimensions is [3, 3, 3], then useful points are
         [[0, 0, 0], [0, 0, 1], [0, 1, 1], [1, 1, 1]]
         which are, respectively:
-        [ a corner, an edge, a center, the core (middle of the cube) ]
+        [a corner, an edge, a center, the core (middle of the cube)]
         All other points are equivalent to one point in this minimal set.
         """
+        assert len(self.eq_classes_path) == 1, \
+               'When computing useful points, there is only 1 eq_classes, ' +\
+               'computed from the dimensions'
+        # start with point 0
+        for point in self.get_useful_points_rec(0, [0] * len(self.dimensions)):
+            yield point
+    
+    def get_useful_points_rec(self, index, minimums):
         if index == len(self.dimensions):
-            return [[]]
-        # h is "head", t is "tail"
-        return ([h] + t for h in xrange(minimum,
-                                        (self.dimensions[index] + 1) / 2)\
-                for t in self.get_useful_points(index + 1, h))
+            yield []
+        else:
+            eq_class = self.eq_classes[index]
+            # We want to remove symmetry-or-rotation-equivalent-points.
+            # The easiest way to achive this goal is to:
+            #   - consider only one half of dimension length (+1);
+            #   - always use sorted coordinates inside equivalence classes.
+            #
+            # For a dimension of length 3, we consider only the values 0 and 1.
+            # For a dimension of length 4, we consider 0 and 1 too.
+            # For a dimension of length 5, we consider 0, 1 and 2.
+            #
+            # Only use sorted coordinates avoid to check [0, 1] and [1, 0],
+            # because they are equivalent. When building a vector, we keep a
+            # "minimum" value (rather a "minimums" array, one minimum for each
+            # equivalence class) to guarantee this condition.
+            minimum = minimums[eq_class]
+            # h is "head", t is "tail"
+            for h in xrange(minimum, (self.dimensions[index] + 1) / 2):
+                # change the minimum for deeper recursive calls
+                minimums[eq_class] = h
+                for t in self.get_useful_points_rec(index + 1, minimums):
+                    yield [h] + t
+            # restore the previous value
+            minimums[eq_class] = minimum
     
     def move(self, vector):
         """Compute the new equivalent classes after a move by the vector."""
@@ -416,7 +448,7 @@ class SnakeCubeSolver:
             # are orthogonal to the previous one
             
             for possible_vector in ( Vector(i, v)
-                                     for v in [ norm, -norm ]
+                                     for v in [norm, -norm]
                                      for i in xrange(len(self.dimensions))
                                      if i != previous_position and
                                         self.symmetry_helper.must_explore(i)):
