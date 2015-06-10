@@ -189,7 +189,7 @@ class VolumeHelper:
                  for i in xrange(dimensions[index])]
     
     def __repr__(self):
-        return repr(cube_flags)
+        return repr(self.flags)
 
 class SymmetryHelper:
 
